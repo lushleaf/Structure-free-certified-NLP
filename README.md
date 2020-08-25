@@ -5,16 +5,16 @@ We propose a certified robust method based on a new randomized smoothing techniq
 <img src="figs/framework_certnlp.png" width=1000></img>
 
 ## How to run
-Download the word embedding file and save to root directory
+--Download the word embedding file and save to root directory
 https://drive.google.com/file/d/1x65ixChKFlWHCecfm6rkZTGT6MlreAIO/view?usp=sharing
 
-Download the dataset
+--Download the dataset
 
 Imdb: https://ai.stanford.edu/~amaas/data/sentiment/
 
 Amazon: https://www.kaggle.com/bittlingmayer/amazonreviews#train.ft.txt.bz2
 
-See run.sh for data processing, training and evaluation.
+--See run.sh for data processing, training and evaluation.
 
 ## Citation
 
