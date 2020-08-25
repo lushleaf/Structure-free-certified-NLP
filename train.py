@@ -33,7 +33,6 @@ from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
 from torch.utils.data.distributed import DistributedSampler
 from tensorboardX import SummaryWriter
 from tqdm import tqdm, trange
-from train_imdb import load_and_cache_examples_randomized
 
 from transformers import (WEIGHTS_NAME,
                           BertConfig,
@@ -256,6 +255,70 @@ def evaluate(args, model, tokenizer, prefix=""):
 
     return results
 
+def load_and_cache_examples_randomized(args, task, tokenizer, random_smooth, epoch, evaluate=False):
+    processor = processors[task]()
+    output_mode = output_modes[task]
+    # Load data features from cache or dataset file
+    cached_features_file = os.path.join(args.data_dir, 'cached_{}_{}_{}_{}_{}'.format(
+        'dev' if evaluate else 'train',
+        list(filter(None, args.model_name_or_path.split('/'))).pop(),
+        str(args.max_seq_length),
+        str(task),
+        str(args.sim_constraint)))
+
+
+    ##############################################################################
+    if os.path.exists(cached_features_file + '_' + str(epoch)):
+    ##############################################################################
+        print('Randomize dataset: cached features exists')
+        logger.info("Loading features from cached file %s", cached_features_file + '_' + str(epoch))
+        features = torch.load(cached_features_file + '_' + str(epoch))
+
+    else:
+        print('Randomize dataset: cached features NOT exists')
+        if os.path.exists(cached_features_file + '_example'):
+            print('Randomize dataset: cached examples exists')
+            examples = torch.load(cached_features_file + '_example')
+        else:
+            print('Randomize dataset: cached examples NOT exists')
+            logger.info("Creating features from dataset file at %s", args.data_dir)
+            examples = processor.get_dev_examples(args.data_dir) if evaluate else processor.get_train_examples(args.data_dir)
+
+            # save examples before perturbe it
+            logger.info("Saving examples into cached file %s", cached_features_file + '_example')
+            torch.save(examples, cached_features_file + '_example')
+
+        for example in examples:
+            if example.text_a:
+                example.text_a = str(random_smooth.get_perturbed_batch(np.array([[example.text_a]]))[0][0])
+            if example.text_b:
+                example.text_b = str(random_smooth.get_perturbed_batch(np.array([[example.text_b]]))[0][0])
+
+        label_list = processor.get_labels()
+        features = convert_examples_to_features(examples, label_list, args.max_seq_length, tokenizer, output_mode,
+            cls_token_at_end=bool(args.model_type in ['xlnet']),            # xlnet has a cls token at the end
+            cls_token=tokenizer.cls_token,
+            sep_token=tokenizer.sep_token,
+            cls_token_segment_id=2 if args.model_type in ['xlnet'] else 1,
+            pad_on_left=bool(args.model_type in ['xlnet']),                 # pad on the left for xlnet
+            pad_token_segment_id=4 if args.model_type in ['xlnet'] else 0)
+        if args.local_rank in [-1, 0]:
+            #logger.info("Saving examples into cached file %s", cached_features_file + '_example')
+            #torch.save(examples, cached_features_file + '_example')   
+            logger.info("Saving features into cached file %s", cached_features_file + '_' + str(epoch))
+            torch.save(features, cached_features_file + '_' + str(epoch))
+            
+    # Convert to Tensors and build dataset
+    all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
+    all_input_mask = torch.tensor([f.input_mask for f in features], dtype=torch.long)
+    all_segment_ids = torch.tensor([f.segment_ids for f in features], dtype=torch.long)
+    if output_mode == "classification":
+        all_label_ids = torch.tensor([f.label_id for f in features], dtype=torch.long)
+    elif output_mode == "regression":
+        all_label_ids = torch.tensor([f.label_id for f in features], dtype=torch.float)
+
+    dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
+    return dataset
 
 def load_and_cache_examples(args, task, tokenizer, evaluate=False):
     processor = processors[task]()
