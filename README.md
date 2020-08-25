@@ -8,7 +8,10 @@ We propose a certified robust method based on a new randomized smoothing techniq
 Download the word embedding file and save to root directory
 https://drive.google.com/file/d/1x65ixChKFlWHCecfm6rkZTGT6MlreAIO/view?usp=sharing
 
-See run.sh for data processing, training and evaluation
+Download the dataset
+Amazon: https://www.kaggle.com/bittlingmayer/amazonreviews#train.ft.txt.bz2
+
+See run.sh for data processing, training and evaluation.
 
 ## Citation
 
