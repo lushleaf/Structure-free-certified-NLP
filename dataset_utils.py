@@ -92,10 +92,10 @@ import pandas as pd
 
 class AmazonProcessor(DataProcessor):
     def get_train_examples(self, data_dir):        
-        return self._generate_train_example('/data/cygong/AmazonFull', 'train')
+        return self._generate_train_example(data_dir, 'train')
 
     def get_dev_examples(self, data_dir):
-        return self._generate_train_example('/data/cygong/AmazonFull', 'test')
+        return self._generate_train_example(data_dir, 'test')
 
     def _generate_train_example(self, data_dir, sub_dir):
         data = pd.read_csv(os.path.join(data_dir, sub_dir + '.csv'), header=None)
