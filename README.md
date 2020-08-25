@@ -2,6 +2,8 @@
 
 We propose a certified robust method based on a new randomized smoothing technique, which constructs a stochastic ensemble by applying random word substitutions on the input sentences, and leverage the statistical properties of the ensemble to provably certify the robustness. Our method is simple and structure-free in that it only requires the black-box queries of the model outputs, and hence can be applied to any pre-trained models (such as BERT) and any types of models (world-level or subword-level).
 
+<img src="figs/framework_certnlp.pdf" width=600></img>
+
 ## How to run
 Download the word embedding file and save to root directory
 https://drive.google.com/file/d/1x65ixChKFlWHCecfm6rkZTGT6MlreAIO/view?usp=sharing
