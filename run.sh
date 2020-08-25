@@ -14,7 +14,7 @@ python train.py \
 --task_name $TASK_NAME \
 --do_train \
 --data_dir $DATA_DIR \
---output_dir ./cygong_amazon_textcnn_output
+--output_dir ./amazon_textcnn_output
 
 # evaluation
 
