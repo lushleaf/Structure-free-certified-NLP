@@ -33,7 +33,7 @@ from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
 from torch.utils.data.distributed import DistributedSampler
 from tensorboardX import SummaryWriter
 from tqdm import tqdm, trange
-from cygong_train_imdb import load_and_cache_examples_randomized
+from train_imdb import load_and_cache_examples_randomized
 
 from transformers import (WEIGHTS_NAME,
                           BertConfig,
