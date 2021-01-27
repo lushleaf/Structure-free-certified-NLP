@@ -46,11 +46,15 @@ from transformers import (WEIGHTS_NAME,
                           XLNetTokenizer
                           )
 
-from transformers import AdamW, WarmupLinearSchedule
+from transformers import AdamW, get_linear_schedule_with_warmup
+# from transformers import AdamW, WarmupLinearSchedule,  get_linear_schedule_with_warmup
 
 from dataset_utils import (compute_metrics, convert_examples_to_features,
                         output_modes, processors)
 import setGPU
+import pickle
+
+from data_util import WordSubstitude
 
 logger = logging.getLogger(__name__)
 
@@ -71,20 +75,20 @@ def set_seed(args):
         torch.cuda.manual_seed_all(args.seed)
 
 
-def train(args, train_dataset, model, tokenizer):
+def train(args, model, tokenizer):
     """ Train the model """
     if args.local_rank in [-1, 0]:
         tb_writer = SummaryWriter()
 
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
-    train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
-    train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
+    # generate original training set
+    examples = load_and_cache_examples(args, args.task_name, tokenizer, evaluate=False)
 
     if args.max_steps > 0:
         t_total = args.max_steps
-        args.num_train_epochs = args.max_steps // (len(train_dataloader) // args.gradient_accumulation_steps) + 1
+        args.num_train_epochs = args.max_steps // (len(examples) // args.gradient_accumulation_steps) + 1
     else:
-        t_total = len(train_dataloader) // args.gradient_accumulation_steps * args.num_train_epochs
+        t_total = len(examples) // args.gradient_accumulation_steps * args.num_train_epochs
 
     # Prepare optimizer and schedule (linear warmup and decay)
     no_decay = ['bias', 'LayerNorm.weight']
@@ -93,9 +97,8 @@ def train(args, train_dataset, model, tokenizer):
         {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
         ]
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.num_train_epochs, eta_min=0)
     # scheduler = WarmupLinearSchedule(optimizer, warmup_steps=args.warmup_steps, t_total=t_total)
-    
+    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps, num_training_steps = t_total)
     if args.fp16:
         try:
             from apex import amp
@@ -105,7 +108,7 @@ def train(args, train_dataset, model, tokenizer):
 
     # Train!
     logger.info("***** Running training *****")
-    logger.info("  Num examples = %d", len(train_dataset))
+    logger.info("  Num examples = %d", len(examples))
     logger.info("  Num Epochs = %d", args.num_train_epochs)
     logger.info("  Instantaneous batch size per GPU = %d", args.per_gpu_train_batch_size)
     logger.info("  Total train batch size (w. parallel, distributed & accumulation) = %d",
@@ -119,11 +122,30 @@ def train(args, train_dataset, model, tokenizer):
     train_iterator = trange(int(args.num_train_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0])
     set_seed(args)  # Added here for reproductibility (even between python 2 and 3)
     
-    train_step = 0
-    train_loss = 0
+    if args.task_name == 'imdb':
+        dataset_name = 'imdb'
+    elif args.task_name == 'amazon':
+        dataset_name = 'amazonfull'
+
+    # random smoother
+    pkl_file = open(args.data_dir + dataset_name + '_perturbation_constraint_pca' + str(args.similarity_threshold) + '_' + str(args.perturbation_constraint) + '.pkl', 'rb')
+    word_substituide_table = pickle.load(pkl_file)
+    pkl_file.close()
+    # similarity_threshold = args.similarity_threshold
+    # pkl_file = open('imdb/imdb_perturbation_constraint_pca' + str(similarity_threshold) + '.pkl', 'rb')
+    # word_substituide_table = pickle.load(pkl_file)
+    # pkl_file.close()
+    random_smooth = WordSubstitude(word_substituide_table)
+
     for _ in train_iterator:
+        # generate perturbed training set
+        train_dataset = load_and_cache_examples_randomized(args, args.task_name, tokenizer, random_smooth, _, evaluate=False)
+
+        train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
+        # train_dataloader has been tokenized here
+        train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
+
         epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
-        scheduler.step()
         for step, batch in enumerate(epoch_iterator):
             model.train()
             batch = tuple(t.to(args.device) for t in batch)
@@ -139,10 +161,6 @@ def train(args, train_dataset, model, tokenizer):
             if args.gradient_accumulation_steps > 1:
                 loss = loss / args.gradient_accumulation_steps
 
-            train_step += 1 
-            train_loss += loss.item()
-            if train_step % 10000 == 0:
-                print(train_loss * 1. / train_step)
             if args.fp16:
                 with amp.scale_loss(loss, optimizer) as scaled_loss:
                     scaled_loss.backward()
@@ -153,7 +171,7 @@ def train(args, train_dataset, model, tokenizer):
 
             tr_loss += loss.item()
             if (step + 1) % args.gradient_accumulation_steps == 0:
-                # scheduler.step()  # Update learning rate schedule
+                scheduler.step()  # Update learning rate schedule
                 optimizer.step()
                 model.zero_grad()
                 global_step += 1
@@ -173,10 +191,9 @@ def train(args, train_dataset, model, tokenizer):
                     output_dir = os.path.join(args.output_dir, 'checkpoint-{}'.format(global_step))
                     if not os.path.exists(output_dir):
                         os.makedirs(output_dir)
-                    torch.save({'state_dict': model.state_dict()}, os.path.join(output_dir, 'training_args.bin'))
-                    # model_to_save = model.module if hasattr(model, 'module') else model  # Take care of distributed/parallel training
-                    # model_to_save.save_pretrained(output_dir)
-                    # torch.save(args, os.path.join(output_dir, 'training_args.bin'))
+                    model_to_save = model.module if hasattr(model, 'module') else model  # Take care of distributed/parallel training
+                    model_to_save.save_pretrained(output_dir)
+                    torch.save(args, os.path.join(output_dir, 'training_args.bin'))
                     logger.info("Saving model checkpoint to %s", output_dir)
 
             if args.max_steps > 0 and global_step > args.max_steps:
@@ -264,7 +281,7 @@ def load_and_cache_examples_randomized(args, task, tokenizer, random_smooth, epo
         list(filter(None, args.model_name_or_path.split('/'))).pop(),
         str(args.max_seq_length),
         str(task),
-        str(args.sim_constraint)))
+        str(args.similarity_threshold)))
 
 
     ##############################################################################
@@ -375,7 +392,6 @@ def main():
     parser.add_argument("--output_dir", default=None, type=str, required=True,
                         help="The output directory where the model predictions and checkpoints will be written.")
 
-
     parser.add_argument('--net_type', default='bert', type=str,
                         help='networktype: bert, textcnn, and so on')
 
@@ -433,6 +449,11 @@ def main():
                         help="Overwrite the cached training and evaluation sets")
     parser.add_argument('--seed', type=int, default=42,
                         help="random seed for initialization")
+
+    parser.add_argument("--similarity_threshold", default=0.8, type=float,
+                        help="The similarity constraint to be considered as synonym.")
+    parser.add_argument("--perturbation_constraint", default=100, type=int,
+                        help="The maximum size of perturbation set of each word")
 
     parser.add_argument('--fp16', action='store_true',
                         help="Whether to use 16-bit (mixed) precision (through NVIDIA apex) instead of 32-bit")
@@ -516,8 +537,7 @@ def main():
 
     # Training
     if args.do_train:
-        train_dataset = load_and_cache_examples_randomized(args, args.task_name, tokenizer, evaluate=False)
-        global_step, tr_loss = train(args, train_dataset, model, tokenizer)
+        global_step, tr_loss = train(args, model, tokenizer)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
 
 
@@ -571,7 +591,6 @@ def main():
             results.update(result)
 
     return results
-
 
 if __name__ == "__main__":
     main()
