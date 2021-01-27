@@ -294,7 +294,7 @@ def randomized_evaluate(args, model, tokenizer, prefix=""):
                 
                 tem_tv = tv.get_tv(original_text)
 
-                if result['acc'] - 1. + np.prod(tem_tv[0:20]) >= 0.5 + args.mc_error:
+                if result['acc'] - 1. + np.prod(tem_tv) >= 0.5 + args.mc_error:
                     total_cert_acc += 1.
                 
                 cert_acc_count += 1.
@@ -369,7 +369,7 @@ def randomized_evaluate(args, model, tokenizer, prefix=""):
                 results[eval_task][file] = {'text': original_text, 'similarity_threshold': args.similarity_threshold, 'p': result['acc'], 'label': 'neg'}
                 
                 tem_tv = tv.get_tv(original_text)
-                if result['acc'] - 1. + np.prod(tem_tv[0:20]) >= 0.5 + args.mc_error:
+                if result['acc'] - 1. + np.prod(tem_tv) >= 0.5 + args.mc_error:
                     total_cert_acc += 1.
                 
                 cert_acc_count += 1.
